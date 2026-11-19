@@ -19,3 +19,7 @@ data/
 .vscode/
 .idea/
 .env
+
+data/
+.venv/
+.ipynb_checkpoints/
