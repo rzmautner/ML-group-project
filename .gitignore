@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data / models (keep large files out of git)
+data/
+*.pkl
+*.h5
+*.pt
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+.env
