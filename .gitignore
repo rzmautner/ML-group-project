@@ -20,3 +20,7 @@ data/
 .vscode/
 .idea/
 .env
+
+# Large generated outputs
+reports/*.parquet
+catboost_info/

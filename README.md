@@ -77,7 +77,7 @@ Then open a notebook (`jupyter lab` or VS Code) and choose the **Python (ml-fina
 
 ### 6. Get the data
 
-We use the public [HMDA](https://ffiec.cfpb.gov/data-publication/snapshot-national-loan-level-dataset) loan-level (LAR) snapshot files for 2024 and 2025. They're about 5 GB each, so they're **not** in git. Everyone downloads them from FFIEC:
+We use the public [HMDA](https://ffiec.cfpb.gov/data-publication/snapshot-national-loan-level-dataset) loan-level (LAR) snapshot files for 2024 and 2025, nationwide. They're about 5 GB each, so they're **not** in git. Everyone downloads them from FFIEC:
 
 ```bash
 python -m hmda.data
@@ -86,18 +86,55 @@ python -m hmda.data
 This:
 
 1. Downloads `2024_public_lar_csv.csv` and `2025_public_lar_csv.csv` into `data/raw/`. If you already have them anywhere under `data/`, it skips this. You need about 11 GB free while it unzips.
-2. Filters to **VA and NC**, action codes **1–5**, and writes `data/processed/va_nc_2024_2025.parquet` (all columns, stored as strings).
+2. Builds `data/processed/hmda_2024_2025.parquet`: all states, action codes 1–5 (~22.5M rows, ~940 MB). Every column is stored as a string so HMDA codes like `Exempt` survive. A `split_key` row hash is added for reproducible sampling.
 
-It takes a few minutes the first time. Re-run with `--rebuild` if the filter settings in `src/hmda/data.py` change. Once the Parquet file exists you can delete `data/raw/` to free space.
+The build takes about 30 seconds with DuckDB. Re-run with `--rebuild` if the settings in `src/hmda/data.py` change. Once the Parquet file exists you can delete `data/raw/` to free space.
 
 In notebooks:
 
 ```python
-from hmda.data import load_hmda, approved_vs_denied
+from hmda.data import connect, load_hmda, approved_vs_denied
 
-df = load_hmda()               # numeric columns coerced, `outcome` label added
-main = approved_vs_denied(df)  # actions 1–3 only, 0/1 `denied` target
+df = load_hmda(states=["VA", "NC"])              # one or more states, all rows
+df = load_hmda(sample=0.05)                      # reproducible 5% nationwide sample
+main = approved_vs_denied(df)                    # actions 1–3, 0/1 `denied` target
+
+con = connect()                                  # DuckDB, view `hmda` = full dataset
+con.sql("SELECT state_code, avg((action_taken = '3')::INT) FROM hmda GROUP BY 1").df()
 ```
+
+Nationwide with all columns is ~22M rows x 100 columns, too big for pandas on most laptops. Use `sample=`, `columns=`, or DuckDB aggregates.
+
+## Notebooks
+
+Run them in order. Each one is saved with its outputs, so you can read the results without re-running.
+
+| Notebook | What it covers | Runtime (M-series Mac) |
+|---|---|---|
+| `notebooks/01_eda.ipynb` | Nationwide EDA: geography, loan/borrower/credit features, lenders, leakage, protected attributes, feature importance (permutation + SHAP) | ~4 min |
+| `notebooks/02_feature_engineering.ipynb` | Column groups, engineered-feature checks, univariate signal (raw vs engineered), encoders, feature-group ablations | ~5 min |
+| `notebooks/03_model_selection.ipynb` | Benchmark of 7 models (train 2024 → test 2025), tabular deep learning (RealMLP, TabM), curves and calibration, threshold, training-size curve, fairness audit | ~45 min |
+
+Result tables are written to `reports/`.
+
+## Code
+
+* `src/hmda/data.py`: download, build, and load the data
+* `src/hmda/features.py`: `HMDAFeatures` (parsing and feature engineering), `make_preprocessor` / `make_pipeline` (sklearn pipelines), and the column lists for leakage and protected attributes
+* `src/hmda/models.py`: model zoo (incl. CatBoost), `tabular_dl_zoo` (RealMLP / TabM via `pytabkit`), `load_split` (train 2024 / test 2025), `benchmark`, `group_metrics` (fairness slices)
+* `src/hmda/tabular_dl.py`: trains RealMLP / TabM in a separate process (`python -m hmda.tabular_dl --rows 200000`). On macOS, PyTorch crashes or hangs if LightGBM/XGBoost/CatBoost load first in the same process.
+* `src/hmda/plotting.py`: shared chart style
+
+```python
+from lightgbm import LGBMClassifier
+from hmda.features import make_pipeline
+from hmda.models import load_split
+
+X_train, y_train, X_test, y_test, audit = load_split(train_frac=0.10, test_frac=0.05)
+pipe = make_pipeline(LGBMClassifier(), kind="tree").fit(X_train, y_train)
+```
+
+Run the unit tests (no data needed) with `pytest`.
 
 ## Adding packages
 
@@ -114,9 +151,11 @@ pip freeze --exclude-editable > requirements.txt
 
 ```
 data/raw/         Raw FFIEC CSVs (gitignored)
-data/processed/   Filtered Parquet subset (gitignored)
-notebooks/        Jupyter notebooks (EDA.ipynb, scratch.ipynb)
-src/hmda/data.py  Download, filter, and load the data
+data/processed/   hmda_2024_2025.parquet (gitignored)
+notebooks/        01_eda, 02_feature_engineering, 03_model_selection
+reports/          Result tables (CSV) written by the notebooks
+src/hmda/         data.py, features.py, models.py, plotting.py
+tests/            Unit tests for the feature pipeline
 pyproject.toml    Makes src/hmda installable with `pip install -e .`
 requirements.txt  Pinned Python dependencies
 ```
